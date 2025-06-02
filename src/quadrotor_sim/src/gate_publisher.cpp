@@ -24,12 +24,13 @@ public:
 	struct Gate {
 		btRigidBody* body;
 		btVector3 position;
+        btQuaternion orientation;
 		float width, height, thickness;
 	};
 
 	std::vector<Gate> gates;
 
-	void createGate(btDiscreteDynamicsWorld* world, btVector3 pos, float w, float h, float t)
+	void createGate(btDiscreteDynamicsWorld* world, btVector3 pos, btQuaternion quat, float w, float h, float t)
 	{
 		// Create collision shape
 		btCollisionShape* gateShape = new btBoxShape(btVector3(w/2, h/2, t/2));
@@ -49,7 +50,7 @@ public:
 
 		world->addRigidBody(body);
 
-		gates.push_back({body, pos, w, h, t});
+		gates.push_back({body, pos, quat, w, h, t});
 	}
 
 
@@ -74,37 +75,26 @@ private:
         dynamicsWorld->addRigidBody(groundBody);
 
         //add gates
-        createGate(dynamicsWorld, btVector3(5, 0, 0), 2.0f, 2.0f, 0.1);
-        createGate(dynamicsWorld, btVector3(10, 10, 5), 2.0f, 2.0f, 0.1);
-        createGate(dynamicsWorld, btVector3(15, 20, -3), 2.0f, 2.0f, 0.1);
+        createGate(dynamicsWorld, btVector3(5, 0, 0), btQuaternion(1,0,0,0), 2.0f, 2.0f, 0.1);
+        createGate(dynamicsWorld, btVector3(10, 10, 5), btQuaternion(1,1,1,1), 2.0f, 2.0f, 0.1);
+        createGate(dynamicsWorld, btVector3(15, 20, -3), btQuaternion(0,1,0,0), 2.0f, 2.0f, 0.1);
  
     }
 
     void publish_gates()
     {
         auto msg = gate_msgs::msg::GateArray();
- /*
-        for (int i = 0; i < 3; ++i)
-        {
-            gate_msgs::msg::Gate gate;
-
-            gate.position.x = 5.0 * i;
-            gate.position.y = 0.0;
-            gate.position.z = 2.0;
-
-            gate.width = 2.0;
-            gate.height = 2.0;
-            gate.thickness = 0.1;
-
-            msg.gates.push_back(gate);
-        }
-*/
         for (Gate g : gates)
         {
             gate_msgs::msg::Gate gate;
             gate.position.x = g.position.getX();
             gate.position.y = g.position.getY();
             gate.position.z = g.position.getZ();
+
+            gate.orientation.x = g.orientation.x();
+            gate.orientation.y = g.orientation.y();
+            gate.orientation.z = g.orientation.z();
+            gate.orientation.w = g.orientation.w();
 
             gate.width = g.width;
             gate.height = g.height;
@@ -121,11 +111,4 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 };
 
-int main(int argc, char* argv[])
-{
-    rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<GatePublisher>());
-    rclcpp::shutdown();
-    return 0;
-}
 

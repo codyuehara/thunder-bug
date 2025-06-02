@@ -29,7 +29,7 @@ public:
 
         init_bullet();
 
-        timer_ = this->create_wall_timer(std::chrono::milliseconds(1000), 
+        timer_ = this->create_wall_timer(std::chrono::milliseconds(100), 
                     std::bind(&QuadrotorSimNode::update, this));
     }
 
@@ -51,7 +51,7 @@ private:
     btMatrix3x3 J;
     btMatrix3x3 J_inv;
     float arm_length = 0.1f; // distance from the center to motor in meters
-    float torque_constant = 0.001f; 
+    float torque_constant = 0.00016f; 
 
     void init_bullet()
     {
@@ -77,11 +77,7 @@ btBroadphaseInterface* broadphase = new btDbvtBroadphase();
             0, Jy, 0,
             0, 0, Jz
         );
-        J_inv.setValue(
-            1/Jx, 0.0, 0.0,
-            0.0, 1/Jy, 0.0,
-            0.0, 0.0, 1/Jz
-        );
+        J_inv = J.inverse();
 
         btVector3 inertia(0, 0, 0);
         shape->calculateLocalInertia(mass, inertia);
@@ -94,7 +90,7 @@ btBroadphaseInterface* broadphase = new btDbvtBroadphase();
         //init state
         state_.pos.setValue(0, 0, 0);
         state_.vel.setValue(0, 0, 0);
-        state_.quat.setValue(1, 0, 0, 0);
+        state_.quat.setValue(0, 0, 0, 1);
         state_.omega.setValue(0, 0, 0);
 
     }
@@ -107,7 +103,6 @@ btBroadphaseInterface* broadphase = new btDbvtBroadphase();
             for (int i = 0; i < 4; ++i)
             {
                 motor_forces_[i] = msg->data[i];
-        RCLCPP_INFO(this->get_logger(), "motor forces: %f, %f, %f, %f", motor_forces_[0], motor_forces_[1], motor_forces_[2], motor_forces_[3]); 
             }
         }
     }
@@ -161,13 +156,14 @@ btBroadphaseInterface* broadphase = new btDbvtBroadphase();
         btMatrix3x3 R(s.quat);
 
         btVector3 thrust_world = R * force; 
+        //btVector3 thrust_world = force;
 
         d.dpos = s.vel;
         RCLCPP_INFO(this->get_logger(), "d pos: %f, %f, %f", d.dpos.x(), d.dpos.y(), d.dpos.z());
         d.dvel = (1 / mass) * thrust_world + gravity;
         RCLCPP_INFO(this->get_logger(), "d vel: %f, %f, %f", d.dvel.x(), d.dvel.y(), d.dvel.z());
 
-        btQuaternion omega_q(0, s.omega.x(), s.omega.y(), s.omega.z());
+        btQuaternion omega_q(s.omega.x(), s.omega.y(), s.omega.z(), 0);
         d.dquat = omega_q * s.quat * 0.5;
         RCLCPP_INFO(this->get_logger(), "d quat: %f, %f, %f, %f", d.dquat.w(), d.dquat.x(), d.dquat.y(), d.dquat.z());
 
@@ -175,6 +171,10 @@ btBroadphaseInterface* broadphase = new btDbvtBroadphase();
         btVector3 cross = s.omega.cross(J_omega);
         btVector3 net_torque = torque_body - cross;
         d.domega = J_inv * net_torque;
+        double max_ang_acc = 100;
+        if (d.domega.length() > max_ang_acc)
+            d.domega = d.domega.normalized() * max_ang_acc;
+
         RCLCPP_INFO(this->get_logger(), "d omega: %f, %f, %f", d.domega.x(), d.domega.y(), d.domega.z());
 
         return d;
