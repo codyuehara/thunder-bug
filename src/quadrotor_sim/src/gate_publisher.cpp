@@ -87,14 +87,14 @@ private:
         for (Gate g : gates)
         {
             gate_msgs::msg::Gate gate;
-            gate.position.x = g.position.getX();
-            gate.position.y = g.position.getY();
-            gate.position.z = g.position.getZ();
+            gate.pose.position.x = g.position.getX();
+            gate.pose.position.y = g.position.getY();
+            gate.pose.position.z = g.position.getZ();
 
-            gate.orientation.x = g.orientation.x();
-            gate.orientation.y = g.orientation.y();
-            gate.orientation.z = g.orientation.z();
-            gate.orientation.w = g.orientation.w();
+            gate.pose.orientation.x = g.orientation.x();
+            gate.pose.orientation.y = g.orientation.y();
+            gate.pose.orientation.z = g.orientation.z();
+            gate.pose.orientation.w = g.orientation.w();
 
             gate.width = g.width;
             gate.height = g.height;
