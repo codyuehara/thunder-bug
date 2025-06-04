@@ -6,7 +6,7 @@ set(Bullet_INCLUDE_DIRS "/usr/include/bullet")
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(gate_msgs REQUIRED)
+find_package(ros2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(Bullet REQUIRED) 
 
@@ -18,7 +18,7 @@ ament_target_dependencies(quadrotor_sim_node
   rclcpp
   geometry_msgs
   std_msgs
-  gate_msgs
+  ros2_msgs
 )
 
 install(TARGETS

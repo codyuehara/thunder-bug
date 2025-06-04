@@ -4,8 +4,8 @@
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
-#include "gate_msgs/msg/gate.hpp"
-#include "gate_msgs/msg/gate_array.hpp"
+#include "ros2_msgs/msg/gate.hpp"
+#include "ros2_msgs/msg/gate_array.hpp"
 #include <btBulletDynamicsCommon.h>
 
 using namespace std::chrono_literals;
@@ -17,7 +17,7 @@ public:
     GatePublisher() : Node("gate_publisher")
     {
 		init_bullet();
-        publisher_ = this->create_publisher<gate_msgs::msg::GateArray>("gates", 10);
+        publisher_ = this->create_publisher<ros2_msgs::msg::GateArray>("gates", 10);
         timer_ = this->create_wall_timer(500ms, std::bind(&GatePublisher::publish_gates, this));
     }
 
@@ -83,10 +83,10 @@ private:
 
     void publish_gates()
     {
-        auto msg = gate_msgs::msg::GateArray();
+        auto msg = ros2_msgs::msg::GateArray();
         for (Gate g : gates)
         {
-            gate_msgs::msg::Gate gate;
+            ros2_msgs::msg::Gate gate;
             gate.pose.position.x = g.position.getX();
             gate.pose.position.y = g.position.getY();
             gate.pose.position.z = g.position.getZ();
@@ -107,7 +107,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Published %ld gates", msg.gates.size());
     }
 
-    rclcpp::Publisher<gate_msgs::msg::GateArray>::SharedPtr publisher_;
+    rclcpp::Publisher<ros2_msgs::msg::GateArray>::SharedPtr publisher_;
     rclcpp::TimerBase::SharedPtr timer_;
 };
 
