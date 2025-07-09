@@ -104,7 +104,7 @@ private:
         }
 
         publisher_->publish(msg);
-        RCLCPP_INFO(this->get_logger(), "Published %ld gates", msg.gates.size());
+        //RCLCPP_INFO(this->get_logger(), "Published %ld gates", msg.gates.size());
     }
 
     rclcpp::Publisher<ros2_msgs::msg::GateArray>::SharedPtr publisher_;

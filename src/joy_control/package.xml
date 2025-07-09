@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>quadrotor_sim</name>
+  <name>joy_control</name>
   <version>0.1.0</version>
   <description>Quadrotor dynamics</description>
 
@@ -13,15 +13,11 @@
   <build_depend>geometry_msgs</build_depend>
   <build_depend>std_msgs</build_depend>
   <build_depend>ros2_msgs</build_depend>
-  <build_depend>sensor_msgs</build_depend>
-
-  <depend>eigen3_cmake_module</depend>
 
   <exec_depend>rclcpp</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>ros2_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -1,236 +1,166 @@
-#include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
-#include <geometry_msgs/msg/pose.hpp>
-#include <btBulletDynamicsCommon.h>
+#include "quadrotor_sim/quadrotor_sim_node.hpp"
 
-class QuadrotorSimNode : public rclcpp::Node
+State State::operator+(const State& other) const {
+    State result;
+    result.position = position + other.position;
+    result.velocity = velocity + other.velocity;
+    result.orientation = (orientation.coeffs() + other.orientation.coeffs()).normalized();
+    result.angular_velocity = angular_velocity + other.angular_velocity;
+    return result;
+}
+
+State State::operator*(double scalar) const {
+    State result;
+    result.position = position * scalar;
+    result.velocity = velocity * scalar;
+    result.orientation = Eigen::Quaterniond(orientation.coeffs() * scalar);
+    result.angular_velocity = angular_velocity * scalar;
+    return result;
+}
+
+QuadrotorSimNode::QuadrotorSimNode()
+: Node("quadrotor_sim_node"),
+  mass_(1.0),
+  thrust_min_(0.0),
+  thrust_max_(100)
 {
-public:
-    struct QuadrotorState {
-        btVector3 pos; // world position
-        btVector3 vel; // world vel
-        btQuaternion quat; // orientation (body to world)
-        btVector3 omega; // ang vel in body frame
-    };
-    struct QuadrotorDerivative {
-        btVector3 dpos;
-        btVector3 dvel;
-        btQuaternion dquat;
-        btVector3 domega;
-    };       
- 
-    QuadrotorSimNode() : Node("quad_sim")
+    joy_sub_ = this->create_subscription<ros2_msgs::msg::JoyControl>("joy_control", 10, std::bind(&QuadrotorSimNode::joy_callback, this, std::placeholders::_1));
+    collision_sub_ = this->create_subscription<std_msgs::msg::String>("collision_event", 10, std::bind(&QuadrotorSimNode::collision_callback, this, std::placeholders::_1));
+    pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("pose", 10);
+
+    initialize();
+}
+
+void QuadrotorSimNode::initialize()
+{
+    //init state
+    state_.position.setZero();
+    state_.velocity.setZero();
+    state_.orientation = Eigen::Quaterniond::Identity();
+    state_.angular_velocity.setZero();
+
+    inertia_ = Eigen::Matrix3d::Zero();
+    inertia_(0,0) = 0.01;
+    inertia_(1,1) = 0.01;
+    inertia_(2,2) = 0.02;
+
+    inertia_inv_ = inertia_.inverse();
+
+    gravity_ = Eigen::Vector3d(0, 0, -9.81);
+
+    hover_thrust_ = mass_ * 9.81;
+    //thrust_ = 0;
+    thrust_ = hover_thrust_;
+    torque_.setZero();
+
+    timer_.reset();
+    timer_ = this->create_wall_timer(10ms, 
+                std::bind(&QuadrotorSimNode::timer_callback, this));
+
+    RCLCPP_INFO(this->get_logger(), "Quad sim started");
+}
+
+Eigen::Vector4d QuadrotorSimNode::clamp_thrust(const Eigen::Vector4d thrusts) const
+{
+    return thrusts.cwiseMax(thrust_min_).cwiseMin(thrust_max_);
+}
+
+Eigen::Quaterniond QuadrotorSimNode::quaternion_derivative(const Eigen::Quaterniond& q, const Eigen::Vector3d& omega)
+{
+    Eigen::Quaterniond omega_q(0, omega.x(), omega.y(), omega.z());
+    Eigen::Quaterniond q_dot = Eigen::Quaterniond((q * omega_q).coeffs() * 0.5);
+    return q_dot;
+}
+
+State QuadrotorSimNode::compute_derivatives(const State& s)
+{
+    State ds;
+
+    //RCLCPP_INFO(this->get_logger(), "thrust: %f, torque x: %f, torque y: %f", thrust_, torque_[0], torque_[1]);
+    Eigen::Vector3d thrust_world = s.orientation * Eigen::Vector3d(0,0,thrust_);
+    Eigen::Vector3d accel = gravity_ + 1 / mass_ * thrust_world;
+    Eigen::Vector3d ang_accel = inertia_inv_ * (torque_ - s.angular_velocity.cross(inertia_ * s.angular_velocity));
+    Eigen::Quaterniond q_dot = quaternion_derivative(s.orientation, s.angular_velocity);
+
+    ds.position = s.velocity;
+    ds.velocity = accel;
+    ds.orientation = q_dot;
+    ds.angular_velocity = ang_accel;
+
+    return ds;
+}
+
+State QuadrotorSimNode::rk4_step(const State& s, double dt)
+{
+    State k1 = compute_derivatives(s);
+    State k2 = compute_derivatives(s + k1 * (dt/2.0));
+    State k3 = compute_derivatives(s + k2 * (dt/2.0));
+    State k4 = compute_derivatives(s + k3 * dt);
+
+    State result;
+    result.position = s.position + dt / 6.0 * (k1.position + 2*k2.position + 2*k3.position + k4.position);
+    result.velocity = s.velocity + dt / 6.0 * (k1.velocity + 2*k2.velocity + 2*k3.velocity + k4.velocity);
+    result.angular_velocity = s.angular_velocity + dt / 6.0 * (k1.angular_velocity + 2*k2.angular_velocity + 2*k3.angular_velocity + k4.angular_velocity);
+
+    Eigen::Quaterniond q = s.orientation;
+    Eigen::Quaterniond dq = k1.orientation;
+    dq.coeffs() += 2.0 * k2.orientation.coeffs();
+    dq.coeffs() += 2.0 * k3.orientation.coeffs();
+    dq.coeffs() += k4.orientation.coeffs();
+    dq.coeffs() *= dt / 6.0;
+    result.orientation = Eigen::Quaterniond(q.coeffs() + dq.coeffs()).normalized();
+
+    return result;
+
+}
+
+void QuadrotorSimNode::timer_callback()
+{
+    //rclcpp::Rate rate(1);
+    for (int i = 0; i < steps_per_callback; ++i)
     {
-        sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-            "/motor_commands", 10, 
-            std::bind(&QuadrotorSimNode::motor_callback, this, std::placeholders::_1));
-        
-        pub_ = this->create_publisher<geometry_msgs::msg::Pose>("/quad_pose", 10);
+        state_ = rk4_step(state_, sim_dt_);
+    }       
 
-        init_bullet();
-
-        timer_ = this->create_wall_timer(std::chrono::milliseconds(100), 
-                    std::bind(&QuadrotorSimNode::update, this));
-    }
-
-private:
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_;
-    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_;
-    rclcpp::TimerBase::SharedPtr timer_;
-
-    btDynamicsWorld* world_;
-    btRigidBody* quad_body_;
-
-    QuadrotorState state_;
-    float motor_forces_[4] = {0, 0, 0, 0};
-    btScalar mass; 
-    btVector3 gravity;
-    double Jx = 0.0023;
-    double Jy = 0.0023;
-    double Jz = 0.004;
-    btMatrix3x3 J;
-    btMatrix3x3 J_inv;
-    float arm_length = 0.1f; // distance from the center to motor in meters
-    float torque_constant = 0.00016f; 
-
-    void init_bullet()
-    {
-        RCLCPP_INFO(this->get_logger(), "Initializing bullet");
-btBroadphaseInterface* broadphase = new btDbvtBroadphase();
-        btDefaultCollisionConfiguration* collisionConfig = new btDefaultCollisionConfiguration();
-        btCollisionDispatcher* dispatcher = new btCollisionDispatcher(collisionConfig);
-        btSequentialImpulseConstraintSolver* solver = new btSequentialImpulseConstraintSolver();
-
-        world_ = new btDiscreteDynamicsWorld(dispatcher, broadphase, solver, collisionConfig);
-        gravity.setValue(0.0, 0.0, -9.81);
-        world_->setGravity(gravity);
-
-        btCollisionShape* shape = new btBoxShape(btVector3(0.2, 0.05, 0.2)); // Quad body
-
-        btTransform transform;
-        transform.setIdentity();
-        transform.setOrigin(btVector3(0, 1, 0));
-
-        mass = 1.0;
-        J.setValue(
-            Jx, 0, 0, 
-            0, Jy, 0,
-            0, 0, Jz
-        );
-        J_inv = J.inverse();
-
-        btVector3 inertia(0, 0, 0);
-        shape->calculateLocalInertia(mass, inertia);
-
-        btDefaultMotionState* motionState = new btDefaultMotionState(transform);
-        btRigidBody::btRigidBodyConstructionInfo rbInfo(mass, motionState, shape, inertia);
-        quad_body_ = new btRigidBody(rbInfo);
-        world_->addRigidBody(quad_body_);
-
-        //init state
-        state_.pos.setValue(0, 0, 0);
-        state_.vel.setValue(0, 0, 0);
-        state_.quat.setValue(0, 0, 0, 1);
-        state_.omega.setValue(0, 0, 0);
-
-    }
-
-    void motor_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
-    {
-        RCLCPP_INFO(this->get_logger(), "motor callback");
-        if (msg->data.size() == 4)
-        {
-            for (int i = 0; i < 4; ++i)
-            {
-                motor_forces_[i] = msg->data[i];
-            }
-        }
-    }
-    void update()
-    {
-//        RCLCPP_INFO(this->get_logger(), "step sim");
-
-        double dt = 0.01;
-
-        double temp1 = arm_length / std::sqrt(2) * (motor_forces_[0] + motor_forces_[1] - motor_forces_[2] - motor_forces_[3]);
-        if (std::isnan(temp1)) temp1 = 0;
-        double temp2 = arm_length / std::sqrt(2) * (-motor_forces_[0] + motor_forces_[1] + motor_forces_[2] - motor_forces_[3]);
-        if (std::isnan(temp2)) temp2 = 0;
-        double temp3 = torque_constant * (motor_forces_[0] - motor_forces_[1] + motor_forces_[2] - motor_forces_[3]);
-        btVector3 torque(temp1, temp2, temp3);
-
-        RCLCPP_INFO(this->get_logger(), "torque: %f, %f, %f", torque.x(), torque.y(), torque.z());
-
-        btVector3 force(0, 0, (motor_forces_[0] + motor_forces_[1] + motor_forces_[2] + motor_forces_[3]));
-
-        RCLCPP_INFO(this->get_logger(), "force: %f, %f, %f", force.x(), force.y(), force.z());
-        //print_state();
-        state_ = rk4_step(state_, torque, force, dt);
-        print_state();
-
-        publish_pose();
-    }    
-
-    void publish_pose()
-    {    
-        geometry_msgs::msg::Pose pose;
-        pose.position.x = state_.pos.x();    
-        pose.position.y = state_.pos.y();    
-        pose.position.z = state_.pos.z();    
-
-        pose.orientation.x = state_.quat.x();
-        pose.orientation.y = state_.quat.y();
-        pose.orientation.z = state_.quat.z();
-        pose.orientation.w = state_.quat.w();
-
-        pub_->publish(pose);
-
-    }
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = this->get_clock()->now();
+    pose_msg.header.frame_id = "world";
     
-    QuadrotorDerivative compute_dynamics(const QuadrotorState& s, const btVector3& torque_body, const btVector3& force)
-    {
+    pose_msg.pose.position.x = state_.position.x();
+    pose_msg.pose.position.y = state_.position.y();
+    pose_msg.pose.position.z = state_.position.z();
 
-        QuadrotorDerivative d;
-    
-        // Rotation matrix from quaternion (world <- body)
-        btMatrix3x3 R(s.quat);
+    pose_msg.pose.orientation.x = state_.orientation.x();
+    pose_msg.pose.orientation.y = state_.orientation.y();
+    pose_msg.pose.orientation.z = state_.orientation.z();
+    pose_msg.pose.orientation.w = state_.orientation.w();
 
-        btVector3 thrust_world = R * force; 
-        //btVector3 thrust_world = force;
+    pose_pub_->publish(pose_msg); 
+    //rate.sleep();
+}
 
-        d.dpos = s.vel;
-        RCLCPP_INFO(this->get_logger(), "d pos: %f, %f, %f", d.dpos.x(), d.dpos.y(), d.dpos.z());
-        d.dvel = (1 / mass) * thrust_world + gravity;
-        RCLCPP_INFO(this->get_logger(), "d vel: %f, %f, %f", d.dvel.x(), d.dvel.y(), d.dvel.z());
+void QuadrotorSimNode::joy_callback(const ros2_msgs::msg::JoyControl::SharedPtr msg)
+{
+    thrust_ = msg->throttle;
+    torque_[2] = msg->roll;
+    torque_[0] = msg->pitch;
+    torque_[1] = msg->yaw;
+}
 
-        btQuaternion omega_q(s.omega.x(), s.omega.y(), s.omega.z(), 0);
-        d.dquat = omega_q * s.quat * 0.5;
-        RCLCPP_INFO(this->get_logger(), "d quat: %f, %f, %f, %f", d.dquat.w(), d.dquat.x(), d.dquat.y(), d.dquat.z());
+void QuadrotorSimNode::collision_callback(const std_msgs::msg::String::SharedPtr msg)
+{
+    RCLCPP_INFO(this->get_logger(), "COLLISION");
+    initialize();
+}
 
-        btVector3 J_omega = J * s.omega;
-        btVector3 cross = s.omega.cross(J_omega);
-        btVector3 net_torque = torque_body - cross;
-        d.domega = J_inv * net_torque;
-        double max_ang_acc = 100;
-        if (d.domega.length() > max_ang_acc)
-            d.domega = d.domega.normalized() * max_ang_acc;
-
-        RCLCPP_INFO(this->get_logger(), "d omega: %f, %f, %f", d.domega.x(), d.domega.y(), d.domega.z());
-
-        return d;
-    }
-    QuadrotorState rk4_step(const QuadrotorState& s, const btVector3& torque_body, const btVector3& force, double dt)
-    {
-        auto f = [&](const QuadrotorState& x) {
-            return compute_dynamics(x, torque_body, force);
-        }; 
-        
-        QuadrotorDerivative k1 = f(s);
-        
-        QuadrotorState s2 = s;
-        s2.pos += 0.5 * dt * k1.dpos;
-        s2.vel += 0.5 * dt * k1.dvel;
-        s2.quat += k1.dquat * 0.5 * dt;
-        s2.omega += 0.5 * dt * k1.domega;
-        s2.quat.normalize();
-
-        QuadrotorDerivative k2= f(s2);
-
-        QuadrotorState s3 = s;
-        s3.pos += 0.5 * dt * k2.dpos;
-        s3.vel += 0.5 * dt * k2.dvel;
-        s3.quat += k2.dquat * 0.5 * dt;
-        s3.omega += 0.5 * dt * k2.domega;
-        s3.quat.normalize();
-
-        QuadrotorDerivative k3 = f(s3);
-
-        QuadrotorState s4 = s;
-        s4.pos += 0.5 * dt * k3.dpos;
-        s4.vel += 0.5 * dt * k3.dvel;
-        s4.quat += k3.dquat * 0.5 * dt;
-        s4.omega += 0.5 * dt * k3.domega;
-        s4.quat.normalize();
-
-        QuadrotorDerivative k4 = f(s4);
-
-        QuadrotorState result = s;
-		result.pos += (dt / 6.0) * (k1.dpos + 2.0 * k2.dpos + 2.0 * k3.dpos + k4.dpos);
-		result.vel += (dt / 6.0) * (k1.dvel + 2.0 * k2.dvel + 2.0 * k3.dvel + k4.dvel);
-		result.quat += (k1.dquat + k2.dquat * 2.0 + k3.dquat * 2.0 + k4.dquat) * (dt / 6.0);
-		result.omega += (dt / 6.0) * (k1.domega + 2.0 * k2.domega + 2.0 * k3.domega + k4.domega);
-		result.quat.normalize(); 
-
-        return result;		
-    }
-
-    void print_state()
-    {
-        RCLCPP_INFO(this->get_logger(), "pos: %f, %f, %f", state_.pos.x(), state_.pos.y(), state_.pos.z());
-        RCLCPP_INFO(this->get_logger(), "vel: %f, %f, %f", state_.vel.x(), state_.vel.y(), state_.vel.z());
-        RCLCPP_INFO(this->get_logger(), "quat: %f, %f, %f, %f", state_.quat.w(), state_.quat.x(), state_.quat.y(), state_.quat.z());
-        RCLCPP_INFO(this->get_logger(), "omega: %f, %f, %f", state_.omega.x(), state_.omega.y(), state_.omega.z());
-
-    }
-
-};
+/*
+int main(int argc, char* argv[])
+{
+rclcpp::init(argc, argv);
+auto node = std::make_shared<QuadrotorSimNode>();
+rclcpp::spin(node);
+rclcpp::shutdown();
+return 0;
+}
+   
+*/ 
