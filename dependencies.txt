@@ -1,0 +1,3 @@
+eigen3
+yaml-cpp
+docker

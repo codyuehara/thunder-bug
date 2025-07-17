@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GateArray.msg"
   "msg/JoyControl.msg"
   "msg/MotorCommands.msg"
+  "srv/RaceTrack.srv"
   DEPENDENCIES geometry_msgs std_msgs builtin_interfaces
   )
 

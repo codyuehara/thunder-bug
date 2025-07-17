@@ -1,0 +1,5 @@
+---
+geometry_msgs/Pose start_pose
+geometry_msgs/Pose[] gate_poses
+int32 num_laps
+

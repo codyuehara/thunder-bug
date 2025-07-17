@@ -1,8 +1,19 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument('scenario', default_value='configs/racetrack1.yaml', description='scenario file'),
+        Node(
+            package='racetrack',
+            executable='racetrack_node',
+            name='racetrack_node',
+            parameters=[{
+                'scenario': LaunchConfiguration('scenario')
+            }]
+        ),
 #        Node(
 #            package='joy_control',
 #            executable='joy_control_node',
@@ -12,6 +23,11 @@ def generate_launch_description():
             package='quadrotor_sim',
             executable='quadrotor_sim_node',
             name='quadrotor_sim_node'
+        ),
+        Node(
+            package='brain',
+            executable='brain_node',
+            name='brain_node'
         ),
         Node(
             package='ros_tcp_endpoint',
