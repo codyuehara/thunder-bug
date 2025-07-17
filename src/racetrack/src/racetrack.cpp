@@ -56,7 +56,12 @@ private:
 
     void handle_service(const std::shared_ptr<ros2_msgs::srv::RaceTrack::Request> request, std::shared_ptr<ros2_msgs::srv::RaceTrack::Response> response)
     {
-        (void)request;
+        bool requested = request->request;
+        if (!requested)
+        {
+            response->num_laps = 0;
+            return;
+        }
         response->start_pose = start_pose_;
         response->gate_poses = gate_poses_;
         response->num_laps = num_laps_;
@@ -73,7 +78,8 @@ private:
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<RaceTrackNode>());
+    auto node = std::make_shared<RaceTrackNode>();
+    rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
 }
