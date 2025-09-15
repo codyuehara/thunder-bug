@@ -46,6 +46,12 @@ class DroneRacingEnv(gym.Env):
         # a1, a2, a3, a4]
         self._drone_state = np.zeros(15)
         self._gate_obs = np.zeros(12)
+
+        self._lambda1 = 1
+        self._lambda2 = 1
+        self._lambda3 = 1
+        self._lambda4 = 1
+        self._lambda5 = 1
         #self._obs = np.zeros(31, dtype=np.float32)
         self._prev_action = np.zeros(4, dtype=np.float32)
         self.runner = None
@@ -87,6 +93,7 @@ class DroneRacingEnv(gym.Env):
             print(data)
         else:
             # optional: ignore or log warning
+            print("Drone state msg not size 15")
             pass
 
     def _gate_obs_callback(self, msg: Float32MultiArray):
@@ -110,13 +117,12 @@ class DroneRacingEnv(gym.Env):
 
     def step(self, action):
         action = np.clip(action, self.action_space.low, self.action_space.high)
+        r_crash = 5.0 if self._drone_state[2] < 0 else 0.0 # TODO or collision with gate
+        r_cmd = self._lambda4 + self._lambda5 
+        r_perc = self._lambda2 * self._lambda3
+        r_prog = 0        
+
         self._prev_action = action.copy()
-
-        r_prog = 1.0
-        r_cmd = 1
-        r_perc = 1
-        r_crash = 0        
-
         obs = np.concatenate([self._drone_state, self._gate_obs, self._prev_action])
         reward = r_prog + r_perc + r_cmd - r_crash
         done = r_crash != 0.0

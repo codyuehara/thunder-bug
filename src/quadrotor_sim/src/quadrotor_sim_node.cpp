@@ -6,6 +6,7 @@ State State::operator+(const State& other) const {
     result.velocity = velocity + other.velocity;
     result.orientation = (orientation.coeffs() + other.orientation.coeffs()).normalized();
     result.angular_velocity = angular_velocity + other.angular_velocity;
+    result.motor_speeds = motor_speeds + other.motor_speeds;
     return result;
 }
 
@@ -15,6 +16,7 @@ State State::operator*(double scalar) const {
     result.velocity = velocity * scalar;
     result.orientation = Eigen::Quaterniond(orientation.coeffs() * scalar);
     result.angular_velocity = angular_velocity * scalar;
+    result.motor_speeds = motor_speeds * scalar;
     return result;
 }
 
@@ -22,12 +24,14 @@ QuadrotorSimNode::QuadrotorSimNode()
 : Node("quadrotor_sim_node"),
   mass_(1.0),
   thrust_min_(0.0),
-  thrust_max_(100)
+  thrust_max_(100),
+  k_mot_(1),
+  arm_length_(1)
 {
     joy_sub_ = this->create_subscription<ros2_msgs::msg::JoyControl>("joy_control", 10, std::bind(&QuadrotorSimNode::joy_callback, this, std::placeholders::_1));
     collision_sub_ = this->create_subscription<std_msgs::msg::String>("collision_event", 10, std::bind(&QuadrotorSimNode::collision_callback, this, std::placeholders::_1));
     pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("pose", 10);
-
+    drone_state_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/drone_state", 10);
     initialize();
 }
 
@@ -38,6 +42,7 @@ void QuadrotorSimNode::initialize()
     state_.velocity.setZero();
     state_.orientation = Eigen::Quaterniond::Identity();
     state_.angular_velocity.setZero();
+    state_.motor_speeds.setZero();
 
     inertia_ = Eigen::Matrix3d::Zero();
     inertia_(0,0) = 0.01;
@@ -53,6 +58,8 @@ void QuadrotorSimNode::initialize()
     thrust_ = hover_thrust_;
     torque_.setZero();
 
+    BatteryModel battery_;
+    
     timer_.reset();
     timer_ = this->create_wall_timer(10ms, 
                 std::bind(&QuadrotorSimNode::timer_callback, this));
@@ -77,6 +84,18 @@ State QuadrotorSimNode::compute_derivatives(const State& s)
     State ds;
 
     //RCLCPP_INFO(this->get_logger(), "thrust: %f, torque x: %f, torque y: %f", thrust_, torque_[0], torque_[1]);
+        
+    Eigen::Vector4d omega_ss;
+    float c_d = 1e-6f;
+    float nu = 1.0f;
+    for (size_t i=0; i<4; ++i) 
+    {
+        float motor_power = c_d * std::pow(s.motor_speeds[i], 3) / nu;
+        float U_bat = battery_.voltage(motor_power);
+        omega_ss[i] = battery_.calculateOmegaSS(motor_commands_[i], U_bat)
+    }
+
+    Eigen::Vector4d motor_speeds_dot = 1 / k_mot_ * (omega_ss - s.motor_speeds);
     Eigen::Vector3d thrust_world = s.orientation * Eigen::Vector3d(0,0,thrust_);
     Eigen::Vector3d accel = gravity_ + 1 / mass_ * thrust_world;
     Eigen::Vector3d ang_accel = inertia_inv_ * (torque_ - s.angular_velocity.cross(inertia_ * s.angular_velocity));
@@ -86,6 +105,7 @@ State QuadrotorSimNode::compute_derivatives(const State& s)
     ds.velocity = accel;
     ds.orientation = q_dot;
     ds.angular_velocity = ang_accel;
+    ds.motor_speeds = motor_speeds_dot;
 
     return ds;
 }
@@ -101,6 +121,7 @@ State QuadrotorSimNode::rk4_step(const State& s, double dt)
     result.position = s.position + dt / 6.0 * (k1.position + 2*k2.position + 2*k3.position + k4.position);
     result.velocity = s.velocity + dt / 6.0 * (k1.velocity + 2*k2.velocity + 2*k3.velocity + k4.velocity);
     result.angular_velocity = s.angular_velocity + dt / 6.0 * (k1.angular_velocity + 2*k2.angular_velocity + 2*k3.angular_velocity + k4.angular_velocity);
+    result.motor_speeds = s.motor_speeds + dt / 6.0 * (k1.motor_speeds + 2*k2.motor_speeds + 2*k3.motor_speeds + k4.motor_speeds);
 
     Eigen::Quaterniond q = s.orientation;
     Eigen::Quaterniond dq = k1.orientation;
@@ -130,6 +151,7 @@ void QuadrotorSimNode::timer_callback()
     pose_msg.pose.position.y = state_.position.y();
     pose_msg.pose.position.z = state_.position.z();
 
+
     pose_msg.pose.orientation.x = state_.orientation.x();
     pose_msg.pose.orientation.y = state_.orientation.y();
     pose_msg.pose.orientation.z = state_.orientation.z();
@@ -137,6 +159,13 @@ void QuadrotorSimNode::timer_callback()
 
     pose_pub_->publish(pose_msg); 
     //rate.sleep();
+
+    Eigen::Matrix3d R = state_.orientation.toRotationMatrix();
+    std_msgs::msg::Float32MultiArray msg;
+    std::vector<float> data;
+    data.insert(data.end(), state_.position.data(), state_.position.data() + state_.position.size());
+    data.insert(data.end(), R.data(), R.data() + R.size());
+    data.insert(data.end(), state_.velocity.data(), state_.velocity.data() + state_.velocity.size());
 }
 
 void QuadrotorSimNode::joy_callback(const ros2_msgs::msg::JoyControl::SharedPtr msg)

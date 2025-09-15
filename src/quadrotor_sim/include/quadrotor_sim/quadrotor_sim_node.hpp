@@ -7,9 +7,12 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "ros2_msgs/msg/joy_control.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/float32_multi_array.hpp"
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+
+#include "quadrotor_sim/battery_model.hpp"
 
 using namespace std::chrono_literals;
 
@@ -18,6 +21,7 @@ struct State {
     Eigen::Vector3d velocity;
     Eigen::Quaterniond orientation;
     Eigen::Vector3d angular_velocity;
+    Eigen::Vector4d motor_speeds;
 
     State operator+(const State& other) const;
     
@@ -39,6 +43,7 @@ private:
     void collision_callback(const std_msgs::msg::String::SharedPtr msg);
 
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr drone_state_pub_;
     rclcpp::Subscription<ros2_msgs::msg::JoyControl>::SharedPtr joy_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr collision_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
@@ -62,4 +67,8 @@ private:
     
     double thrust_min_;
     double thrust_max_;
+    double k_mot_;
+    double arm_length_;
+    BatteryModel battery_;
+    std::array<float, 4> motor_commands_;
 };
