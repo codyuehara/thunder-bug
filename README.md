@@ -15,6 +15,14 @@ ros2 launch racetrack quadrotor_sim.launch.py
 Mono camera and IMU
 
 ## Gate Detection
-test
+### Before flight
+Dataset with images of gates that are annotated for 4 corners + edges (can also have multiple gates in same frame) using CVAT and outputs COCO Json file.
+UNet model is trained using annotated dataset.
+
+### During live flight
+Subscribes to /image_raw where the camera is outputting its frames to and plugs into UNet model to extract 4 corners of gate + PAFs.
+Determines where the next gate is and publishes positions of the next gate's 4 corners to /gate_obs
 
 ## RL Controller
+Subscribes to both /drone_state and /gate_obs and concatenates together to create R^31 observation vector
+Outputs action (thrust and body rates) to /thrust_and_body_rates
